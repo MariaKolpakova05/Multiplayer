@@ -1,4 +1,4 @@
-using Unity.Netcode;
+/*using FishNet.Object;
 using UnityEngine;
 
 public class PlayerCombat : NetworkBehaviour
@@ -6,49 +6,88 @@ public class PlayerCombat : NetworkBehaviour
     [SerializeField] private PlayerNetwork _playerNetwork;
     [SerializeField] private int _damage = 10;
 
-
     void Update()
-{
-    if (!IsOwner) return; // Только локальный игрок может инициировать атаку
-
-    if (Input.GetKeyDown(KeyCode.Space))
     {
-        // Простой поиск цели: находим первый объект с PlayerNetwork, который не мы
-        PlayerNetwork[] allPlayers = FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None);
-        foreach (var player in allPlayers)
+        if (!base.IsOwner) return;
+
+        if (Input.GetKeyDown(KeyCode.Space))
         {
-            if (player != _playerNetwork) // _playerNetwork ссылка на свой компонент
+            PlayerNetwork[] allPlayers = FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None);
+            foreach (var player in allPlayers)
             {
-                TryAttack(player);
-                break; // Атакуем только первого найденного
+                if (player != _playerNetwork)
+                {
+                    TryAttack(player);
+                    break;
+                }
             }
         }
     }
-}
 
     public void TryAttack(PlayerNetwork target)
     {
-        // Атаку инициирует только локальный владелец объекта.
-        if (!IsOwner || target == null)
+        if (!base.IsOwner || target == null)
             return;
 
-        DealDamageServerRpc(target.NetworkObjectId, _damage);
+        DealDamageServer(target.NetworkObject.ObjectId, _damage);
     }
 
     [ServerRpc]
-    private void DealDamageServerRpc(ulong targetObjectId, int damage)
+    private void DealDamageServer(int targetObjectId, int damage)
     {
-        // Сервер проверяет, существует ли цель среди заспавненных сетевых объектов.
-        if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(targetObjectId, out NetworkObject targetObject))
+        if (!ServerManager.Objects.Spawned.TryGetValue(targetObjectId, out NetworkObject targetObject))
             return;
 
         PlayerNetwork targetPlayer = targetObject.GetComponent<PlayerNetwork>();
-        // Запрещаем урон самому себе и удары по некорректной цели.
         if (targetPlayer == null || targetPlayer == _playerNetwork)
             return;
 
-        // Итоговое значение HP ограничиваем снизу нулем.
-        int nextHp = Mathf.Max(0, targetPlayer.HP.Value - damage);
-        targetPlayer.HP.Value = nextHp;
+        int nextHp = Mathf.Max(0, targetPlayer.HP.Value - damage);  // доступ через .Value
+        targetPlayer.HP.Value = nextHp;  // присваивание в .Value
     }
-}
+}*/
+/*
+using FishNet.Object;
+using UnityEngine;
+
+public class PlayerCombat : NetworkBehaviour
+{
+    [SerializeField] private PlayerNetwork _playerNetwork;
+    [SerializeField] private int _damage = 10;
+
+    private void Update()
+    {
+        if (!base.IsOwner) return;
+
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            PlayerNetwork[] allPlayers = FindObjectsByType<PlayerNetwork>(FindObjectsSortMode.None);
+            foreach (var player in allPlayers)
+            {
+                if (player != _playerNetwork)
+                {
+                    TryAttack(player);
+                    break;
+                }
+            }
+        }
+    }
+
+    public void TryAttack(PlayerNetwork target)
+    {
+        if (!base.IsOwner || target == null) return;
+        DealDamageServer(target.NetworkObjectId, _damage);
+    }
+
+    [ServerRpc]
+    private void DealDamageServer(int targetObjectId, int damage)
+    {
+        if (!base.ServerManager.Objects.Spawned.TryGetValue(targetObjectId, out NetworkObject targetObject))
+            return;
+
+        PlayerNetwork targetPlayer = targetObject.GetComponent<PlayerNetwork>();
+        if (targetPlayer == null || targetPlayer == _playerNetwork) return;
+
+        targetPlayer.TakeDamage(damage);
+    }
+}*/

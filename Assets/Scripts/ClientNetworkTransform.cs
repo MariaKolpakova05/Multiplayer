@@ -1,4 +1,4 @@
-using Unity.Netcode.Components;
+/*using Unity.Netcode.Components;
 using UnityEngine;
 
 namespace Unity.Netcode.Components
@@ -11,4 +11,4 @@ namespace Unity.Netcode.Components
             return false; // Клиент имеет авторитет над своим движением
         }
     }
-}
+}*/

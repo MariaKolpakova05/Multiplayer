@@ -1,125 +1,79 @@
-using Unity.Collections;
-using Unity.Netcode;
+/*using FishNet.Object;
+using FishNet.Object.Synchronizing;
 using UnityEngine;
 using System.Collections;
+using FishNet;
 
 public class PlayerNetwork : NetworkBehaviour
 {
-    // Ник должен быть виден всем клиентам, но менять его может только сервер.
-    public NetworkVariable<FixedString32Bytes> Nickname = new(
-        default,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
-
-    // HP тоже читает каждый клиент, но изменяется только на сервере.
-    public NetworkVariable<int> HP = new(
-        100,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
-
-    public NetworkVariable<bool> IsAlive = new(
-        true,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server
-    );
+    public readonly SyncVar<string> Nickname = new SyncVar<string>("Player");
+    public readonly SyncVar<int> HP = new SyncVar<int>(100);
+    public readonly SyncVar<bool> IsAlive = new SyncVar<bool>(true);
 
     [SerializeField] private Transform[] _spawnPoints;
     [SerializeField] private GameObject _playerVisual;
     
-    // Флаг для предотвращения множественных корутин
     private bool _isRespawning = false;
-    private Coroutine _respawnCoroutine;
 
-    public override void OnNetworkSpawn()
+    private void Awake()
     {
-        if (IsOwner)
+        Nickname.OnChange += OnNicknameChanged;
+        HP.OnChange += OnHpChanged;
+        IsAlive.OnChange += OnIsAliveChanged;
+    }
+
+    public override void OnStartNetwork()
+    {
+        base.OnStartNetwork();
+
+        if (base.IsServerInitialized && !base.IsSpawned)
         {
-            SubmitNicknameServerRpc(ConnectionUI.PlayerNickname);
+            base.ServerManager.Spawn(gameObject, base.Owner);
+        }
+
+        if (base.Owner.IsLocalClient)
+        {
+            SetNicknameServer(ConnectionUI.PlayerNickname);
         }
         
-        // Подписываемся на изменения HP и IsAlive
-        HP.OnValueChanged += OnHpChanged;
-        IsAlive.OnValueChanged += OnIsAliveChanged;
-        
-        // Сразу применяем текущее состояние визуала
         UpdateVisualState(IsAlive.Value);
     }
 
-    public override void OnNetworkDespawn()
+    [ServerRpc]
+    private void SetNicknameServer(string nickname)
     {
-        // Отписываемся от событий при уничтожении объекта
-        HP.OnValueChanged -= OnHpChanged;
-        IsAlive.OnValueChanged -= OnIsAliveChanged;
-        
-        // Останавливаем корутину, если она запущена
-        if (_respawnCoroutine != null)
-        {
-            StopCoroutine(_respawnCoroutine);
-            _respawnCoroutine = null;
-        }
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void SubmitNicknameServerRpc(string nickname)
-    {
-        string safeValue = string.IsNullOrWhiteSpace(nickname) ? $"Player_{OwnerClientId}" : nickname.Trim();
-        Nickname.Value = safeValue;
+        Nickname.Value = string.IsNullOrWhiteSpace(nickname) ? $"Player_{OwnerId}" : nickname.Trim();
     }
     
-    private void OnHpChanged(int prev, int next)
+    private void OnNicknameChanged(string oldValue, string newValue, bool asServer) { }
+    
+    private void OnHpChanged(int oldValue, int newValue, bool asServer)
     {
-        // Только сервер обрабатывает смерть
-        if (!IsServer) return;
+        if (!InstanceFinder.IsServerStarted) return;
         
-        // Если HP упало до 0 или ниже, игрок ещё жив, и респавн ещё не запущен
-        if (next <= 0 && IsAlive.Value && !_isRespawning)
+        if (newValue <= 0 && IsAlive.Value && !_isRespawning)
         {
             IsAlive.Value = false;
             _isRespawning = true;
-            
-            // Запускаем корутину только если GameObject активен
-            if (gameObject.activeInHierarchy)
-            {
-                _respawnCoroutine = StartCoroutine(RespawnRoutine());
-            }
-            else
-            {
-                // Если объект неактивен, используем альтернативный подход
-                Debug.LogWarning($"Player {OwnerClientId} is inactive, using delayed respawn via Invoke");
-                Invoke(nameof(RespawnViaInvoke), 3f);
-            }
+            StartCoroutine(RespawnRoutine());
         }
     }
     
     private IEnumerator RespawnRoutine()
     {
-        // Ждём 3 секунды
         yield return new WaitForSeconds(3f);
-        
-        // Выполняем респавн
-        PerformRespawn();
-        
-        _isRespawning = false;
-        _respawnCoroutine = null;
-    }
-    
-    private void RespawnViaInvoke()
-    {
         PerformRespawn();
         _isRespawning = false;
     }
     
     private void PerformRespawn()
     {
-        if (!IsServer) return;
+        if (!InstanceFinder.IsServerStarted) return;
     
         if (_spawnPoints != null && _spawnPoints.Length > 0)
         {
             int idx = Random.Range(0, _spawnPoints.Length);
         
-            // Прямая работа с CharacterController
             CharacterController cc = GetComponent<CharacterController>();
             if (cc != null)
             {
@@ -132,41 +86,335 @@ public class PlayerNetwork : NetworkBehaviour
                 transform.position = _spawnPoints[idx].position;
             }
         }
-        else
-        {
-            Debug.LogWarning("Нет точек спавна! Игрок возрождается на месте.");
-        }
     
         HP.Value = 100;
         IsAlive.Value = true;
     }
     
-    private void OnIsAliveChanged(bool prev, bool next)
+    private void OnIsAliveChanged(bool oldValue, bool newValue, bool asServer)
     {
-        // Это выполняется на всех клиентах при изменении IsAlive
-        UpdateVisualState(next);
+        UpdateVisualState(newValue);
     }
     
     private void UpdateVisualState(bool isAlive)
     {
-        // Показываем или скрываем визуальную модель
         if (_playerVisual != null)
-        {
             _playerVisual.SetActive(isAlive);
-        }
         
-        // Если игрок умер — отключаем коллайдер и CharacterController
         if (TryGetComponent<Collider>(out var col))
-        {
             col.enabled = isAlive;
-        }
         
         if (TryGetComponent<CharacterController>(out var cc))
-        {
             cc.enabled = isAlive;
+    }
+}*/
+// Новый PlayerNetwork.cs для FishNet
+/*
+using FishNet.Object;
+using FishNet.Object.Synchronizing;
+using UnityEngine;
+using System.Collections;
+
+public class PlayerNetwork : NetworkBehaviour
+{
+    // Новый синтаксис SyncVar в FishNet 4.7.2R
+    public readonly SyncVar<string> Nickname = new SyncVar<string>("Player");
+    public readonly SyncVar<int> HP = new SyncVar<int>(100);
+    public readonly SyncVar<bool> IsAlive = new SyncVar<bool>(true);
+
+    [SerializeField] private Transform[] _spawnPoints;
+    [SerializeField] private GameObject _playerVisual;
+    
+    private bool _isRespawning = false;
+    private Coroutine _respawnCoroutine;
+
+    private void Awake()
+    {
+        // Подписываемся на изменения SyncVar
+        Nickname.OnChange += OnNicknameChanged;
+        HP.OnChange += OnHpChanged;
+        IsAlive.OnChange += OnIsAliveChanged;
+    }
+
+    public override void OnStartNetwork()
+    {
+        base.OnStartNetwork();
+        
+        if (base.IsOwner)
+        {
+            SetNicknameServer(ConnectionUI.PlayerNickname);
         }
         
-        // Включаем/выключаем GameObject в зависимости от состояния
-        //gameObject.SetActive(isAlive) вызовет проблемы с корутинами
+        UpdateVisualState(IsAlive.Value);
+    }
+
+    public override void OnStopNetwork()
+    {
+        base.OnStopNetwork();
+        
+        if (_respawnCoroutine != null)
+        {
+            StopCoroutine(_respawnCoroutine);
+            _respawnCoroutine = null;
+        }
+    }
+
+    [ServerRpc]
+    private void SetNicknameServer(string nickname)
+    {
+        Nickname.Value = string.IsNullOrWhiteSpace(nickname) 
+            ? $"Player_{OwnerId}" 
+            : nickname.Trim();
+    }
+
+    private void OnNicknameChanged(string oldValue, string newValue, bool asServer)
+    {
+        // UI обновляется через этот callback
+    }
+
+    private void OnHpChanged(int oldValue, int newValue, bool asServer)
+    {
+        if (!base.IsServerInitialized) return;
+        
+        if (newValue <= 0 && IsAlive.Value && !_isRespawning)
+        {
+            IsAlive.Value = false;
+            _isRespawning = true;
+            
+            if (gameObject.activeInHierarchy)
+            {
+                _respawnCoroutine = StartCoroutine(RespawnRoutine());
+            }
+            else
+            {
+                Invoke(nameof(RespawnViaInvoke), 3f);
+            }
+        }
+    }
+
+    private void OnIsAliveChanged(bool oldValue, bool newValue, bool asServer)
+    {
+        UpdateVisualState(newValue);
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void TakeDamage(int damage)
+    {
+        HP.Value = Mathf.Max(0, HP.Value - damage);
+    }
+
+    private IEnumerator RespawnRoutine()
+    {
+        yield return new WaitForSeconds(3f);
+        PerformRespawn();
+        _isRespawning = false;
+        _respawnCoroutine = null;
+    }
+
+    private void RespawnViaInvoke()
+    {
+        PerformRespawn();
+        _isRespawning = false;
+    }
+
+    private void PerformRespawn()
+    {
+        if (!base.IsServerInitialized) return;
+
+        if (_spawnPoints != null && _spawnPoints.Length > 0)
+        {
+            int idx = Random.Range(0, _spawnPoints.Length);
+            CharacterController cc = GetComponent<CharacterController>();
+            if (cc != null)
+            {
+                cc.enabled = false;
+                transform.position = _spawnPoints[idx].position;
+                cc.enabled = true;
+            }
+            else
+            {
+                transform.position = _spawnPoints[idx].position;
+            }
+        }
+
+        HP.Value = 100;
+        IsAlive.Value = true;
+    }
+
+    private void UpdateVisualState(bool isAlive)
+    {
+        if (_playerVisual != null)
+            _playerVisual.SetActive(isAlive);
+
+        if (TryGetComponent<Collider>(out var col))
+            col.enabled = isAlive;
+
+        if (TryGetComponent<CharacterController>(out var cc))
+            cc.enabled = isAlive;
+    }
+}*/
+using FishNet.Object;
+using FishNet.Object.Synchronizing;
+using TMPro;
+using UnityEngine;
+using System.Collections;
+
+public class PlayerNetwork : NetworkBehaviour
+{
+    public readonly SyncVar<int> HP = new SyncVar<int>(100);
+    public readonly SyncVar<string> Nickname = new SyncVar<string>("Player");
+    public readonly SyncVar<bool> IsAlive = new SyncVar<bool>(true);
+
+    [SerializeField] private TMP_Text _hpText;
+    [SerializeField] private TMP_Text _nicknameText;
+    [SerializeField] private GameObject _visualModel;
+    
+    private bool _isRespawning = false;
+    private CharacterController _cc;
+
+    private void Awake()
+    {
+        _cc = GetComponent<CharacterController>();
+    }
+
+    public override void OnStartNetwork()
+    {
+        base.OnStartNetwork();
+
+        // Подписываемся на изменения SyncVar
+        HP.OnChange += OnHpChanged;
+        Nickname.OnChange += OnNicknameChanged;
+        IsAlive.OnChange += OnIsAliveChanged;
+
+        // Начальное состояние UI
+        UpdateUI();
+        ApplyVisuals(IsAlive.Value);
+
+        // Отправляем ник на сервер, если мы владелец
+        if (base.Owner.IsLocalClient)
+        {
+            // Небольшая задержка, чтобы ConnectionUI точно установил ник
+            Invoke(nameof(SendNickname), 0.5f);
+        }
+    }
+
+    public override void OnStopNetwork()
+    {
+        base.OnStopNetwork();
+        
+        HP.OnChange -= OnHpChanged;
+        Nickname.OnChange -= OnNicknameChanged;
+        IsAlive.OnChange -= OnIsAliveChanged;
+        
+        // Отменяем все запланированные вызовы
+        CancelInvoke();
+    }
+
+    private void SendNickname()
+    {
+        SetNicknameServerRpc(ConnectionUI.PlayerNickname);
+    }
+
+    [ServerRpc]
+    public void SetNicknameServerRpc(string name)
+    {
+        Nickname.Value = string.IsNullOrWhiteSpace(name) 
+            ? $"Player_{base.OwnerId}" 
+            : name;
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void TakeDamageServerRpc(int damage)
+    {
+        HP.Value = Mathf.Max(0, HP.Value - damage);
+    }
+
+    private void OnHpChanged(int prev, int next, bool asServer)
+    {
+        UpdateUI();
+
+        // Только сервер обрабатывает смерть
+        if (base.IsServerInitialized && next <= 0 && IsAlive.Value && !_isRespawning)
+        {
+            _isRespawning = true;
+            IsAlive.Value = false; // Это вызовет OnIsAliveChanged на всех клиентах
+            
+            // Используем InvokeRepeating для надежности
+            // Ждем 3 секунды и выполняем респавн
+            Invoke(nameof(PerformRespawn), 3f);
+            
+            Debug.Log($"[PlayerNetwork] Player {OwnerId} died, respawning in 3 seconds...");
+        }
+    }
+
+    private void OnIsAliveChanged(bool prev, bool next, bool asServer)
+    {
+        ApplyVisuals(next);
+        Debug.Log($"[PlayerNetwork] Player {OwnerId} IsAlive changed to {next}");
+    }
+
+    private void OnNicknameChanged(string prev, string next, bool asServer)
+    {
+        UpdateUI();
+    }
+
+    private void UpdateUI()
+    {
+        if (_hpText != null) _hpText.text = $"HP: {HP.Value}";
+        if (_nicknameText != null) _nicknameText.text = Nickname.Value;
+    }
+
+    private void ApplyVisuals(bool isVisible)
+    {
+        // Визуальная модель
+        if (_visualModel != null) 
+            _visualModel.SetActive(isVisible);
+
+        // CharacterController
+        if (_cc != null) 
+            _cc.enabled = isVisible;
+
+        // Коллайдер
+        if (TryGetComponent<Collider>(out var col))
+            col.enabled = isVisible;
+        
+        // ВАЖНО: НЕ деактивируем сам GameObject!
+        // gameObject.SetActive(isVisible); // ЗАКОММЕНТИРОВАНО
+    }
+
+    private void PerformRespawn()
+    {
+        if (!base.IsServerInitialized) return;
+
+        // Случайная позиция для респавна
+        Vector3 respawnPos = new Vector3(
+            Random.Range(-7f, 7f), 
+            2f, 
+            Random.Range(-7f, 7f)
+        );
+
+        // Отключаем CC для телепортации
+        if (_cc != null)
+        {
+            _cc.enabled = false;
+            transform.position = respawnPos;
+        }
+        else
+        {
+            transform.position = respawnPos;
+        }
+
+        // Восстанавливаем HP и оживляем
+        HP.Value = 100;
+        IsAlive.Value = true;
+        _isRespawning = false;
+
+        // Включаем CC обратно
+        if (_cc != null)
+        {
+            _cc.enabled = true;
+        }
+
+        Debug.Log($"[PlayerNetwork] Player {OwnerId} respawned at {respawnPos}");
     }
 }
