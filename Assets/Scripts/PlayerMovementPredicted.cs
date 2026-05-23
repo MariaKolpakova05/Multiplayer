@@ -3,7 +3,6 @@ using FishNet.Object.Prediction;
 using FishNet.Transporting;
 using UnityEngine;
 
-// 1. Ñòðóêòóðà ââîäà
 public struct MoveData : IReplicateData
 {
     public float Horizontal;
@@ -15,7 +14,7 @@ public struct MoveData : IReplicateData
 
 }
 
-// 2. Ñòðóêòóðà êîððåêöèè
+
 public struct ReconcileData : IReconcileData
 {
     public Vector3 Position;

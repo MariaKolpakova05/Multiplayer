@@ -1,4 +1,4 @@
-/*using FishNet.Object;
+using FishNet.Object;
 using UnityEngine;
 
 [RequireComponent(typeof(CharacterController))]
@@ -36,4 +36,4 @@ public class PlayerMovement : NetworkBehaviour
 
         if (_cc.isGrounded) _verticalVelocity = 0f;
     }
-}*/
+}

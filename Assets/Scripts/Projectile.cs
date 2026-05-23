@@ -20,6 +20,20 @@ public class Projectile : NetworkBehaviour
 
 
             target.HP.Value = Mathf.Max(0, target.HP.Value - 25);
+
+            // Начисляем очко стрелявшему
+            if (base.Owner.IsValid)
+            {
+                foreach (var nob in base.Owner.Objects)
+                {
+                    if (nob.TryGetComponent<PlayerNetwork>(out var shooterPN))
+                    {
+                        shooterPN.Score.Value += 1;
+                        break;
+                    }
+                }
+            }
+
             base.Despawn();
         }
     }

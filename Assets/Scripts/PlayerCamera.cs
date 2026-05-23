@@ -5,7 +5,7 @@ public class PlayerCamera : NetworkBehaviour
 {
     public override void OnStartNetwork()
     {
-        // Èñïîëüçóåì base.Owner.IsLocalClient âìåñòî IsOwner
+        
         if (!base.Owner.IsLocalClient)
         {
             enabled = false;
